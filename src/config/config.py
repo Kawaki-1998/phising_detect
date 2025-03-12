@@ -11,13 +11,6 @@ LOG_DIR = BASE_DIR / "src" / "logs"
 for dir_path in [DATA_DIR, MODEL_DIR, LOG_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
-# Database Configuration
-CASSANDRA_CONFIG = {
-    "host": os.getenv("CASSANDRA_HOST", "localhost"),
-    "port": int(os.getenv("CASSANDRA_PORT", 9042)),
-    "keyspace": "phishing_detection",
-}
-
 # Model Configuration
 MODEL_CONFIG = {
     "random_state": 42,
@@ -45,6 +38,6 @@ MLFLOW_CONFIG = {
 # API Configuration
 API_CONFIG = {
     "host": "0.0.0.0",
-    "port": int(os.getenv("PORT", 5000)),
+    "port": int(os.getenv("PORT", 8000)),
     "debug": bool(os.getenv("DEBUG", False)),
 } 

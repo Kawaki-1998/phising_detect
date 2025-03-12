@@ -1,124 +1,141 @@
 # Phishing Domain Detection
 
-A machine learning-based system for detecting phishing domains using advanced feature engineering and ensemble models.
+[![CI/CD Pipeline](https://github.com/Kawaki-1998/phising_detect/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/Kawaki-1998/phising_detect/actions/workflows/ci-cd.yml)
+[![codecov](https://codecov.io/gh/Kawaki-1998/phising_detect/branch/main/graph/badge.svg)](https://codecov.io/gh/Kawaki-1998/phising_detect)
+
+A machine learning-based system for detecting phishing domains using FastAPI and MLflow.
 
 ## Features
 
-- Real-time phishing domain detection via REST API
-- Advanced URL feature extraction
-- Multiple ML models (RandomForest, XGBoost, LightGBM, CatBoost)
-- Automated hyperparameter optimization using Optuna
-- MLflow experiment tracking
-- Cassandra database for caching predictions
-- Deployment configuration for Render
+- Real-time phishing domain detection
+- Brand impersonation detection
+- Suspicious feature analysis
+- MLflow integration for experiment tracking
+- Comprehensive monitoring dashboard
+- REST API with FastAPI
+- Automated testing and CI/CD pipeline
 
-## Project Structure
+## Installation
 
-```
-phishing_detection/
-├── src/
-│   ├── api/              # Flask API implementation
-│   ├── data/             # Data processing scripts
-│   ├── features/         # Feature engineering
-│   ├── models/           # Model training and evaluation
-│   ├── utils/            # Utility functions
-│   ├── visualization/    # Visualization scripts
-│   ├── config/          # Configuration files
-│   ├── database/        # Database operations
-│   ├── logs/            # Application logs
-│   ├── notebooks/       # Jupyter notebooks
-│   └── tests/           # Unit tests
-├── deployment/          # Deployment configurations
-├── requirements.txt     # Python dependencies
-└── README.md           # Project documentation
+1. Clone the repository:
+```bash
+git clone https://github.com/Kawaki-1998/phising_detect.git
+cd phising_detect
 ```
 
-## Setup
+2. Create and activate a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
 
-1. Install dependencies:
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Install and start Cassandra:
-```bash
-# For Windows:
-# Download and install Apache Cassandra
-# Start the service
-```
-
-3. Set up environment variables:
-```bash
-CASSANDRA_HOST=localhost
-CASSANDRA_PORT=9042
-MLFLOW_TRACKING_URI=http://localhost:5000
-```
-
 ## Usage
 
-1. Train the model:
+1. Start the MLflow server:
 ```bash
-python src/models/train.py
+mlflow server --host 127.0.0.1 --port 5000
 ```
 
-2. Start the API:
+2. Start the FastAPI application:
 ```bash
-python src/api/app.py
+uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-3. Make predictions:
-```bash
-curl -X POST http://localhost:5000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"domain": "example.com"}'
-```
+3. Access the API documentation:
+- OpenAPI documentation: http://localhost:8000/docs
+- ReDoc documentation: http://localhost:8000/redoc
+
+4. Access MLflow UI:
+- MLflow dashboard: http://localhost:5000
 
 ## API Endpoints
 
-- `POST /predict`: Predict if a domain is phishing
-  - Request body: `{"domain": "example.com"}`
-  - Response: Prediction results with confidence score
+### Check Domain
+```http
+POST /check_domain
+```
+Check if a domain is potentially phishing.
 
-- `GET /health`: Health check endpoint
+Request body:
+```json
+{
+    "domain": "example.com",
+    "threshold": 0.5
+}
+```
 
-## Model Training
+### Dashboard Statistics
+```http
+GET /dashboard/stats?days=7
+```
+Get aggregated statistics for the monitoring dashboard.
 
-The system uses multiple models and selects the best performing one:
-- RandomForest
-- XGBoost
-- LightGBM
-- CatBoost
+### Domain Predictions History
+```http
+GET /dashboard/predictions/{domain}
+```
+Get prediction history for a specific domain.
 
-Hyperparameter optimization is performed using Optuna, and all experiments are tracked using MLflow.
+## Development
 
-## Feature Engineering
+1. Run tests:
+```bash
+pytest src/tests/ -v --cov=src
+```
 
-URL features extracted include:
-- URL length
-- Number of special characters
-- Number of dots
-- Number of subdomains
-- HTTPS usage
-- Domain length
-- Path length
-- Query parameters
+2. Format code:
+```bash
+black src/
+```
 
-## Deployment
+3. Check code style:
+```bash
+flake8 src/
+```
 
-The project includes configuration for deployment on Render:
+## Project Structure
 
-1. Connect your repository to Render
-2. Configure environment variables
-3. Deploy using the provided `render.yaml`
+```
+Phishing_Domain_Detection/
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml
+├── src/
+│   ├── api/
+│   │   └── app.py
+│   ├── features/
+│   │   ├── brand_detection.py
+│   │   └── feature_extractor.py
+│   ├── models/
+│   │   └── best_phishing_model.pkl
+│   └── tests/
+│       ├── test_api.py
+│       └── test_features.py
+├── README.md
+├── requirements.txt
+└── setup.py
+```
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- FastAPI for the web framework
+- MLflow for experiment tracking
+- scikit-learn and LightGBM for machine learning
+- GitHub Actions for CI/CD 
