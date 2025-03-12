@@ -54,6 +54,11 @@ class DomainResponse(BaseModel):
     brand_detection: Dict
     suspicious_features: List[str]
 
+class TimelineEntry(BaseModel):
+    timestamp: str
+    is_phishing: bool
+    confidence: float
+
 class DashboardStats(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
@@ -61,7 +66,7 @@ class DashboardStats(BaseModel):
     phishing_ratio: float
     avg_confidence: float
     top_suspicious_features: List[Dict[str, int]]
-    detection_timeline: List[Dict[str, Union[str, float, bool]]]
+    detection_timeline: List[TimelineEntry]
     brand_impersonation_stats: Dict[str, int]
     confidence_distribution: Dict[str, int]
 
