@@ -1,21 +1,62 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, validator
 import joblib
 import numpy as np
 from typing import Dict, List, Optional, Any, Union
 import logging
+from logging.handlers import RotatingFileHandler
+import traceback
 from src.features.brand_detection import BrandDetector
 import uvicorn
 from src.feature_extraction.feature_extractor import FeatureExtractor
 import mlflow
-from src.config.config import MLFLOW_CONFIG
+from src.config.config import MLFLOW_CONFIG, LOG_DIR
 import json
 from datetime import datetime, timedelta
 import pandas as pd
+import os
+
+# Ensure logs directory exists
+os.makedirs(LOG_DIR, exist_ok=True)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_file = os.path.join(LOG_DIR, 'app.log')
+
+# Remove any existing handlers
+root = logging.getLogger()
+if root.handlers:
+    for handler in root.handlers:
+        root.removeHandler(handler)
+
+# Configure the root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Create a logger for this module
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Create handlers
+console_handler = logging.StreamHandler()
+file_handler = RotatingFileHandler(
+    log_file,
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5,
+    encoding='utf-8'
+)
+
+# Create formatters and add it to handlers
+log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(log_format)
+file_handler.setFormatter(log_format)
+
+# Add handlers to the logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+logger.info(f"Logging initialized. Log file: {log_file}")
 
 # Initialize MLflow
 mlflow.set_tracking_uri(MLFLOW_CONFIG["tracking_uri"])
@@ -30,13 +71,25 @@ app = FastAPI(
 
 # Load model components
 try:
-    model = joblib.load('models/best_phishing_model.pkl')
-    scaler = joblib.load('models/feature_scaler.pkl')
-    feature_names = joblib.load('models/feature_names.pkl')
+    model_path = os.path.join('models', 'best_phishing_model.pkl')
+    scaler_path = os.path.join('models', 'feature_scaler.pkl')
+    feature_names_path = os.path.join('models', 'feature_names.pkl')
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}")
+    if not os.path.exists(scaler_path):
+        raise FileNotFoundError(f"Scaler file not found at {scaler_path}")
+    if not os.path.exists(feature_names_path):
+        raise FileNotFoundError(f"Feature names file not found at {feature_names_path}")
+
+    model = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    feature_names = joblib.load(feature_names_path)
     brand_detector = BrandDetector()
     logger.info("Model components loaded successfully")
 except Exception as e:
     logger.error(f"Error loading model components: {str(e)}")
+    logger.error(f"Traceback: {traceback.format_exc()}")
     raise
 
 # Initialize feature extractor
@@ -46,15 +99,33 @@ class DomainRequest(BaseModel):
     domain: str
     threshold: float = 0.5
 
+    @validator('domain')
+    def validate_domain(cls, v):
+        if not v:
+            raise ValueError('Domain cannot be empty')
+        if len(v) > 253:  # Maximum length of a domain name
+            raise ValueError('Domain name too long')
+        return v.lower()
+
+    @validator('threshold')
+    def validate_threshold(cls, v):
+        if not 0 <= v <= 1:
+            raise ValueError('Threshold must be between 0 and 1')
+        return v
+
 class DomainResponse(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     domain: str
     is_phishing: bool
     risk_score: float
     confidence: float
-    brand_detection: Dict
+    brand_detection: Dict[str, Any]
     suspicious_features: List[str]
 
 class TimelineEntry(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     timestamp: str
     is_phishing: bool
     confidence: float
@@ -68,17 +139,35 @@ class DashboardStats(BaseModel):
     top_suspicious_features: List[Dict[str, int]]
     detection_timeline: List[TimelineEntry]
     brand_impersonation_stats: Dict[str, int]
-    confidence_distribution: Dict[str, int]
+    confidence_distribution: Dict[str, float]
 
 def log_prediction_to_mlflow(domain: str, features: dict, prediction_result: dict):
     """Log prediction details to MLflow."""
     try:
         with mlflow.start_run():
             # Convert all values to JSON serializable format
+            features_json = {}
+            for k, v in features.items():
+                if isinstance(v, (np.int64, np.int32, np.float64, np.float32)):
+                    features_json[k] = float(v)
+                elif isinstance(v, bool):
+                    features_json[k] = bool(v)
+                else:
+                    features_json[k] = str(v)
+            
+            prediction_json = {}
+            for k, v in prediction_result.items():
+                if isinstance(v, (np.int64, np.int32, np.float64, np.float32)):
+                    prediction_json[k] = float(v)
+                elif isinstance(v, bool):
+                    prediction_json[k] = bool(v)
+                else:
+                    prediction_json[k] = str(v)
+            
             prediction_details = {
                 "domain": domain,
-                "features": {k: float(v) if isinstance(v, (int, float, bool)) else str(v) for k, v in features.items()},
-                "prediction": {k: float(v) if isinstance(v, (int, float, bool)) else str(v) for k, v in prediction_result.items()}
+                "features": features_json,
+                "prediction": prediction_json
             }
             
             # Log parameters
@@ -97,370 +186,193 @@ def log_prediction_to_mlflow(domain: str, features: dict, prediction_result: dic
             
     except Exception as e:
         logger.error(f"Error logging to MLflow: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         # Don't raise the exception since MLflow logging is not critical
-        pass
 
-def extract_features_for_domain(domain: str) -> Dict:
-    """Extract all features for a domain."""
-    # Basic features
-    basic_features = {
-        'qty_dot_url': domain.count('.'),
-        'qty_hyphen_url': domain.count('-'),
-        'qty_underline_url': domain.count('_'),
-        'qty_slash_url': domain.count('/'),
-        'qty_questionmark_url': domain.count('?'),
-        'qty_equal_url': domain.count('='),
-        'qty_at_url': domain.count('@'),
-        'qty_and_url': domain.count('&'),
-        'qty_exclamation_url': domain.count('!'),
-        'qty_space_url': domain.count(' '),
-        'qty_tilde_url': domain.count('~'),
-        'qty_comma_url': domain.count(','),
-        'qty_plus_url': domain.count('+'),
-        'qty_asterisk_url': domain.count('*'),
-        'qty_hashtag_url': domain.count('#'),
-        'qty_dollar_url': domain.count('$'),
-        'qty_percent_url': domain.count('%'),
-    }
-    
-    # Brand detection features
-    brand_features = brand_detector.extract_brand_features(domain)
-    
-    # Combine all features
-    features = {**basic_features, **brand_features}
-    return features
-
-def get_suspicious_features(features: Dict, domain: str) -> List[str]:
-    """Identify suspicious features in the domain."""
-    suspicious = []
-    
-    # Check for number-letter substitutions
-    if features.get('number_substitutions', 0) > 0:
-        suspicious.append("Contains number-letter substitutions")
-    
-    # Check for brand impersonation
-    if features.get('contains_brand', 0) == 1:
-        if features.get('brand_with_addons', 0) == 1:
-            suspicious.append("Brand name with suspicious additions")
-        if features.get('has_suspicious_prefix', 0) == 1:
-            suspicious.append("Suspicious prefix before brand name")
-        if features.get('has_suspicious_suffix', 0) == 1:
-            suspicious.append("Suspicious suffix after brand name")
-    
-    # Check for suspicious TLD
-    if features.get('suspicious_tld', 0) == 1:
-        suspicious.append("Suspicious top-level domain")
-    
-    # Check for suspicious keywords
-    if features.get('suspicious_keywords_count', 0) > 0:
-        suspicious.append("Contains suspicious keywords")
-    
-    return suspicious
+@app.get("/health")
+def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy"}
 
 @app.post("/check_domain", response_model=DomainResponse)
 async def check_domain(request: DomainRequest):
+    """Check if a domain is potentially phishing."""
     try:
-        # Validate domain
-        if not request.domain:
-            raise HTTPException(status_code=400, detail="Domain cannot be empty")
-            
+        logger.info(f"Processing domain: {request.domain}")
+
         # Extract features
-        features = feature_extractor.extract_features(request.domain)
+        try:
+            features = feature_extractor.extract_features(request.domain)
+            logger.debug(f"Extracted features: {features}")
+        except Exception as e:
+            logger.error(f"Error extracting features for domain {request.domain}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error extracting features: {str(e)}"
+            )
         
-        # Map feature names to match model expectations
-        feature_dict = {
-            'qty_dot_url': features['num_dots'],
-            'qty_hyphen_url': features['num_hyphens'],
-            'qty_underline_url': 0,
-            'qty_slash_url': 0,
-            'qty_questionmark_url': 0,
-            'qty_equal_url': 0,
-            'qty_at_url': 0,
-            'qty_and_url': 0,
-            'qty_exclamation_url': 0,
-            'qty_space_url': 0,
-            'qty_tilde_url': 0,
-            'qty_comma_url': 0,
-            'qty_plus_url': 0,
-            'qty_asterisk_url': 0,
-            'qty_hashtag_url': 0,
-            'qty_dollar_url': 0,
-            'qty_percent_url': 0,
-            'qty_tld_url': 1,
-            'length_url': features['domain_length'],
-            'qty_dot_domain': features['num_dots'],
-            'qty_hyphen_domain': features['num_hyphens'],
-            'qty_underline_domain': 0,
-            'qty_slash_domain': 0,
-            'qty_questionmark_domain': 0,
-            'qty_equal_domain': 0,
-            'qty_at_domain': 0,
-            'qty_and_domain': 0,
-            'qty_exclamation_domain': 0,
-            'qty_space_domain': 0,
-            'qty_tilde_domain': 0,
-            'qty_comma_domain': 0,
-            'qty_plus_domain': 0,
-            'qty_asterisk_domain': 0,
-            'qty_hashtag_domain': 0,
-            'qty_dollar_domain': 0,
-            'qty_percent_domain': 0,
-            'qty_vowels_domain': sum(c in 'aeiou' for c in request.domain.lower()),
-            'domain_length': features['domain_length'],
-            'domain_in_ip': 0,
-            'server_client_domain': 0,
-            'qty_dot_directory': 0,
-            'qty_hyphen_directory': 0,
-            'qty_underline_directory': 0,
-            'qty_slash_directory': 0,
-            'qty_questionmark_directory': 0,
-            'qty_equal_directory': 0,
-            'qty_at_directory': 0,
-            'qty_and_directory': 0,
-            'qty_exclamation_directory': 0,
-            'qty_space_directory': 0,
-            'qty_tilde_directory': 0,
-            'qty_comma_directory': 0,
-            'qty_plus_directory': 0,
-            'qty_asterisk_directory': 0,
-            'qty_hashtag_directory': 0,
-            'qty_dollar_directory': 0,
-            'qty_percent_directory': 0,
-            'directory_length': 0,
-            'qty_dot_file': 0,
-            'qty_hyphen_file': 0,
-            'qty_underline_file': 0,
-            'qty_slash_file': 0,
-            'qty_questionmark_file': 0,
-            'qty_equal_file': 0,
-            'qty_at_file': 0,
-            'qty_and_file': 0,
-            'qty_exclamation_file': 0,
-            'qty_space_file': 0,
-            'qty_tilde_file': 0,
-            'qty_comma_file': 0,
-            'qty_plus_file': 0,
-            'qty_asterisk_file': 0,
-            'qty_hashtag_file': 0,
-            'qty_dollar_file': 0,
-            'qty_percent_file': 0,
-            'file_length': 0,
-            'qty_dot_params': 0,
-            'qty_hyphen_params': 0,
-            'qty_underline_params': 0,
-            'qty_slash_params': 0,
-            'qty_questionmark_params': 0,
-            'qty_equal_params': 0,
-            'qty_at_params': 0,
-            'qty_and_params': 0,
-            'qty_exclamation_params': 0,
-            'qty_space_params': 0,
-            'qty_tilde_params': 0,
-            'qty_comma_params': 0,
-            'qty_plus_params': 0,
-            'qty_asterisk_params': 0,
-            'qty_hashtag_params': 0,
-            'qty_dollar_params': 0,
-            'qty_percent_params': 0,
-            'params_length': 0,
-            'tld_present_params': 0,
-            'qty_params': 0,
-            'email_in_url': 0,
-            'time_response': 0,
-            'domain_spf': 0,
-            'asn_ip': 0,
-            'time_domain_activation': 0,
-            'time_domain_expiration': 0,
-            'qty_ip_resolved': 1,
-            'qty_nameservers': 1,
-            'qty_mx_servers': 1,
-            'ttl_hostname': 0,
-            'tls_ssl_certificate': 0,
-            'qty_redirects': 0,
-            'url_google_index': 0,
-            'domain_google_index': 0,
-            'url_shortened': 0
-        }
+        # Validate features
+        missing_features = set(feature_names) - set(features.keys())
+        if missing_features:
+            logger.error(f"Missing features for domain {request.domain}: {missing_features}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required features: {', '.join(missing_features)}"
+            )
         
-        # Convert features to array and scale
-        feature_values = []
-        for feature_name in feature_names:
-            feature_values.append(feature_dict[feature_name])
-        X = np.array(feature_values).reshape(1, -1)
-        X_scaled = scaler.transform(X)
+        # Scale features
+        try:
+            feature_values = []
+            for feature_name in feature_names:
+                feature_values.append(float(features[feature_name]))
+            
+            X = np.array(feature_values).reshape(1, -1)
+            X_scaled = scaler.transform(X)
+            logger.debug(f"Scaled features shape: {X_scaled.shape}")
+        except Exception as e:
+            logger.error(f"Error scaling features for domain {request.domain}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error scaling features: {str(e)}"
+            )
         
-        # Get prediction probability
-        proba = model.predict_proba(X_scaled)[0]
-        risk_score = proba[1]  # Probability of being phishing
+        # Get prediction and probability
+        try:
+            prediction = model.predict(X_scaled)[0]
+            probabilities = model.predict_proba(X_scaled)[0]
+            logger.debug(f"Model prediction: {prediction}, probabilities: {probabilities}")
+        except Exception as e:
+            logger.error(f"Error making prediction for domain {request.domain}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error making prediction: {str(e)}"
+            )
         
-        # Determine if phishing based on threshold
-        is_phishing = risk_score > request.threshold
+        # Get brand detection results
+        try:
+            brand_results = brand_detector.check_brand_impersonation(request.domain)
+            logger.debug(f"Brand detection results: {brand_results}")
+        except Exception as e:
+            logger.error(f"Error checking brand impersonation for domain {request.domain}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            brand_results = {}  # Continue with empty results
         
-        # Get brand detection and suspicious features
-        brand_detection = feature_extractor.detect_brand(request.domain)
-        suspicious_features = feature_extractor.get_suspicious_features(request.domain)
+        # Calculate risk score and confidence
+        risk_score = float(probabilities[1])
+        confidence = float(max(probabilities))
+        is_phishing = bool(risk_score >= request.threshold)
         
-        # Format brand detection as a dictionary if it's not already
-        if not isinstance(brand_detection, dict):
-            brand_detection = {"detected_brand": str(brand_detection) if brand_detection else "none"}
+        # Get suspicious features
+        try:
+            suspicious_features = feature_extractor.get_suspicious_features(request.domain)
+            logger.debug(f"Suspicious features: {suspicious_features}")
+        except Exception as e:
+            logger.error(f"Error getting suspicious features for domain {request.domain}: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            suspicious_features = []  # Continue with empty list
         
-        # Calculate confidence
-        confidence = max(proba)
-        
-        # Log prediction to MLflow
-        prediction_result = {
+        response = {
             "domain": request.domain,
             "is_phishing": is_phishing,
-            "risk_score": float(risk_score),
-            "confidence": float(confidence),
-            "threshold": request.threshold,
-            "brand_detection": brand_detection,
-            "suspicious_features": suspicious_features
+            "risk_score": risk_score,
+            "confidence": confidence,
+            "brand_detection": brand_results,
+            "suspicious_features": suspicious_features[:5]  # Top 5 suspicious features
         }
-        log_prediction_to_mlflow(request.domain, feature_dict, prediction_result)
         
-        return DomainResponse(
-            domain=request.domain,
-            is_phishing=is_phishing,
-            risk_score=float(risk_score),
-            confidence=float(confidence),
-            brand_detection=brand_detection,
-            suspicious_features=suspicious_features
-        )
+        # Log prediction
+        try:
+            log_prediction_to_mlflow(request.domain, features, response)
+        except Exception as e:
+            logger.error(f"Error logging prediction to MLflow: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            # Continue without MLflow logging
         
-    except HTTPException as e:
-        # Re-raise HTTP exceptions
-        raise e
+        logger.info(f"Successfully processed domain {request.domain}: phishing={is_phishing}, risk_score={risk_score:.2f}")
+        return response
+        
+    except ValueError as e:
+        logger.error(f"Validation error for domain {request.domain}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error processing domain {request.domain}: {str(e)}")
-        import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-@app.get("/dashboard/stats")
-async def get_dashboard_stats(days: Optional[int] = 7):
-    """Get aggregated statistics for the monitoring dashboard."""
+@app.get("/dashboard/stats", response_model=DashboardStats)
+async def get_dashboard_stats(days: int = 7):
+    """Get dashboard statistics for the specified number of days."""
     try:
-        # Calculate the start date for filtering
-        start_date = (datetime.now() - timedelta(days=days)).isoformat()
+        logger.info(f"Getting dashboard stats for last {days} days")
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=days)
         
-        # Get all runs from the experiment
-        client = mlflow.tracking.MlflowClient()
-        experiment = client.get_experiment_by_name(MLFLOW_CONFIG["experiment_name"])
+        # Query MLflow for runs in the specified time range
+        try:
+            runs = mlflow.search_runs(
+                experiment_ids=[mlflow.get_experiment_by_name(MLFLOW_CONFIG["experiment_name"]).experiment_id],
+                filter_string=f"attributes.start_time >= {int(start_time.timestamp() * 1000)} and attributes.start_time <= {int(end_time.timestamp() * 1000)}"
+            )
+            logger.debug(f"Found {len(runs)} MLflow runs")
+        except Exception as e:
+            logger.error(f"Error querying MLflow: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            runs = pd.DataFrame()  # Empty DataFrame
         
-        if not experiment:
-            raise HTTPException(status_code=404, detail="No experiment found")
+        if len(runs) == 0:
+            logger.info("No MLflow runs found, returning empty stats")
+            return {
+                "total_predictions": 0,
+                "phishing_ratio": 0.0,
+                "avg_confidence": 0.0,
+                "top_suspicious_features": [],
+                "detection_timeline": [],
+                "brand_impersonation_stats": {},
+                "confidence_distribution": {"low": 0, "medium": 0, "high": 0}
+            }
         
-        runs = client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=f"attributes.start_time > '{start_date}'"
-        )
-        
-        # Initialize counters and collectors
+        # Calculate statistics
         total_predictions = len(runs)
-        phishing_count = 0
-        confidence_sum = 0
-        suspicious_features_count = {}
-        timeline_data = []
-        brand_impersonation_count = {}
-        confidence_levels = {"high": 0, "medium": 0, "low": 0}
+        phishing_predictions = runs[runs["metrics.risk_score"] >= 0.5]
+        phishing_ratio = len(phishing_predictions) / total_predictions if total_predictions > 0 else 0
+        avg_confidence = runs["metrics.confidence"].mean()
         
-        # Process each run
-        for run in runs:
-            # Get metrics and tags
-            metrics = run.data.metrics
-            tags = run.data.tags
-            
-            # Update counters
-            if tags.get("prediction_type") == "phishing":
-                phishing_count += 1
-            
-            confidence = metrics.get("prediction_confidence", 0)
-            confidence_sum += confidence
-            
-            # Update confidence distribution
-            confidence_level = tags.get("confidence_level", "low")
-            confidence_levels[confidence_level] += 1
-            
-            # Get prediction details
-            try:
-                prediction_path = client.download_artifacts(run.info.run_id, "prediction_details.json")
-                with open(prediction_path) as f:
-                    prediction_details = json.load(f)
-                
-                # Update suspicious features count
-                for feature in prediction_details["suspicious_features"]:
-                    suspicious_features_count[feature] = suspicious_features_count.get(feature, 0) + 1
-                
-                # Update brand impersonation stats
-                if prediction_details["brand_detection"]:
-                    for brand in prediction_details["brand_detection"]:
-                        brand_impersonation_count[brand] = brand_impersonation_count.get(brand, 0) + 1
-                
-                # Add to timeline
-                timeline_data.append({
-                    "timestamp": run.info.start_time,
-                    "is_phishing": prediction_details["prediction_result"]["is_phishing"],
-                    "confidence": confidence
-                })
-            except:
-                continue
+        # Create timeline entries
+        timeline = []
+        for _, run in runs.iterrows():
+            timeline.append({
+                "timestamp": datetime.fromtimestamp(run["start_time"] / 1000).isoformat(),
+                "is_phishing": run["metrics.risk_score"] >= 0.5,
+                "confidence": float(run["metrics.confidence"])
+            })
         
-        # Prepare the response
-        stats = DashboardStats(
-            total_predictions=total_predictions,
-            phishing_ratio=phishing_count / total_predictions if total_predictions > 0 else 0,
-            avg_confidence=confidence_sum / total_predictions if total_predictions > 0 else 0,
-            top_suspicious_features=sorted(
-                [{"feature": k, "count": v} for k, v in suspicious_features_count.items()],
-                key=lambda x: x["count"],
-                reverse=True
-            )[:10],
-            detection_timeline=sorted(timeline_data, key=lambda x: x["timestamp"]),
-            brand_impersonation_stats=brand_impersonation_count,
-            confidence_distribution=confidence_levels
-        )
+        # Calculate confidence distribution
+        confidence_dist = {
+            "low": len(runs[runs["metrics.confidence"] < 0.6]),
+            "medium": len(runs[(runs["metrics.confidence"] >= 0.6) & (runs["metrics.confidence"] < 0.8)]),
+            "high": len(runs[runs["metrics.confidence"] >= 0.8])
+        }
         
+        stats = {
+            "total_predictions": total_predictions,
+            "phishing_ratio": float(phishing_ratio),
+            "avg_confidence": float(avg_confidence),
+            "top_suspicious_features": [],  # This would need feature importance analysis
+            "detection_timeline": timeline,
+            "brand_impersonation_stats": {},  # This would need aggregation of brand detection results
+            "confidence_distribution": confidence_dist
+        }
+        
+        logger.info(f"Successfully generated dashboard stats: {stats}")
         return stats
         
     except Exception as e:
-        logger.error(f"Error generating dashboard stats: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/dashboard/predictions/{domain}")
-async def get_domain_predictions(domain: str):
-    """Get prediction history for a specific domain."""
-    try:
-        client = mlflow.tracking.MlflowClient()
-        experiment = client.get_experiment_by_name(MLFLOW_CONFIG["experiment_name"])
-        
-        if not experiment:
-            raise HTTPException(status_code=404, detail="No experiment found")
-        
-        # Search for runs with the specific domain
-        runs = client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=f"params.domain = '{domain}'"
-        )
-        
-        predictions = []
-        for run in runs:
-            predictions.append({
-                "timestamp": run.info.start_time,
-                "is_phishing": run.data.tags.get("prediction_type") == "phishing",
-                "confidence": run.data.metrics.get("prediction_confidence"),
-                "risk_score": run.data.metrics.get("phishing_probability"),
-                "run_id": run.info.run_id
-            })
-        
-        return sorted(predictions, key=lambda x: x["timestamp"], reverse=True)
-        
-    except Exception as e:
-        logger.error(f"Error retrieving domain predictions: {str(e)}")
+        logger.error(f"Error getting dashboard stats: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

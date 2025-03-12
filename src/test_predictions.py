@@ -8,9 +8,15 @@ from sklearn.preprocessing import MinMaxScaler
 import re
 from urllib.parse import urlparse
 from typing import List, Dict
+import requests
+import time
+from tqdm import tqdm
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Original feature list
@@ -159,13 +165,15 @@ def extract_features_for_domain(domain: str) -> Dict:
     
     return features
 
-def test_predictions(threshold: float = 0.5):
-    # Load the model, scaler, and feature names
+def test_model_directly(threshold: float = 0.5):
+    """Test the model directly with predefined domains."""
+    # Load the model components
     try:
         model = joblib.load('models/best_phishing_model.pkl')
         scaler = joblib.load('models/feature_scaler.pkl')
         feature_names = joblib.load('models/feature_names.pkl')
-        logger.info("Model, scaler, and feature names loaded successfully")
+        feature_extractor = FeatureExtractor()
+        logger.info("Model components loaded successfully")
     except Exception as e:
         logger.error(f"Error loading model components: {str(e)}")
         return
@@ -186,38 +194,121 @@ def test_predictions(threshold: float = 0.5):
         "apple-id-verify.com"
     ]
 
-    # Extract features for each domain
-    features_list = []
-    for domain in test_domains:
-        features = extract_features_for_domain(domain)
-        # Ensure features are in the same order as during training
-        features_list.append([features[feature] for feature in feature_names])
-
-    # Convert to DataFrame with feature names
-    X = pd.DataFrame(features_list, columns=feature_names)
-    
-    # Scale features using the saved scaler
-    X_scaled = scaler.transform(X)
-    
-    logger.info("\nRunning predictions on test domains:")
+    logger.info("\nRunning direct model predictions on test domains:")
     print("\nDomain Prediction Results:")
     print("-" * 75)
     print(f"{'Domain':<35} {'Prediction':<12} {'Confidence':<10} {'Risk Score':<10}")
     print("-" * 75)
 
-    for domain, features in zip(test_domains, X_scaled):
-        # Make prediction
-        prediction_proba = model.predict_proba([features])[0]
-        risk_score = prediction_proba[1]  # Probability of being phishing
-        prediction = "Phishing" if risk_score > threshold else "Legitimate"
-        confidence = float(max(prediction_proba))
+    for domain in test_domains:
+        try:
+            # Extract features
+            features = feature_extractor.extract_features(domain)
+            feature_values = [features[feature] for feature in feature_names]
+            X = np.array(feature_values).reshape(1, -1)
+            
+            # Scale features
+            X_scaled = scaler.transform(X)
+            
+            # Make prediction
+            prediction_proba = model.predict_proba(X_scaled)[0]
+            risk_score = prediction_proba[1]
+            prediction = "Phishing" if risk_score > threshold else "Legitimate"
+            confidence = float(max(prediction_proba))
 
-        print(f"{domain:<35} {prediction:<12} {confidence:.4f}    {risk_score:.4f}")
+            print(f"{domain:<35} {prediction:<12} {confidence:.4f}    {risk_score:.4f}")
+            
+        except Exception as e:
+            logger.error(f"Error processing domain {domain}: {str(e)}")
+
+def test_api_with_dataset(sample_size: int = 100, threshold: float = 0.5):
+    """Test the API using domains from the dataset."""
+    # Load the test data
+    logger.info("Loading test data...")
+    try:
+        df = pd.read_csv('data/processed/phishing_data.csv')
+    except Exception as e:
+        logger.error(f"Error loading test data: {str(e)}")
+        return
+
+    # Take a sample for testing
+    test_data = df.sample(n=sample_size, random_state=42)
+    
+    # API endpoint
+    url = 'http://localhost:8000/check_domain'
+    
+    # Test each domain
+    results = []
+    logger.info(f"\nTesting {sample_size} domains through API...")
+    for _, row in tqdm(test_data.iterrows(), total=len(test_data)):
+        try:
+            # Create a test domain based on features
+            domain_length = max(5, int(row['domain_length']))  # Ensure minimum length of 5
+            domain = f"{''.join(['a' for _ in range(domain_length)])}.com"
+            
+            # Make prediction request
+            response = requests.post(
+                url,
+                json={"domain": domain, "threshold": threshold}
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                results.append({
+                    'domain': domain,
+                    'actual_label': row['phishing'],
+                    'predicted_phishing': result['is_phishing'],
+                    'risk_score': result['risk_score'],
+                    'confidence': result['confidence'],
+                    'suspicious_features': result['suspicious_features']
+                })
+            else:
+                logger.error(f"Error for domain {domain}: {response.text}")
+            
+            # Small delay to avoid overwhelming the server
+            time.sleep(0.1)
+            
+        except Exception as e:
+            logger.error(f"Error processing domain {domain}: {str(e)}")
+    
+    # Save results to CSV
+    results_df = pd.DataFrame(results)
+    results_df.to_csv('test_results.csv', index=False)
+    logger.info("Results saved to test_results.csv")
+    
+    # Print summary
+    print("\nTest Summary:")
+    print("-" * 50)
+    print(f"Total domains tested: {len(results)}")
+    print(f"Phishing domains detected: {results_df['predicted_phishing'].sum()}")
+    print(f"Average confidence: {results_df['confidence'].mean():.2f}")
+    print(f"Average risk score: {results_df['risk_score'].mean():.2f}")
+    
+    # Calculate metrics
+    accuracy = (results_df['actual_label'] == results_df['predicted_phishing']).mean()
+    true_positives = ((results_df['actual_label'] == 1) & (results_df['predicted_phishing'] == True)).sum()
+    false_positives = ((results_df['actual_label'] == 0) & (results_df['predicted_phishing'] == True)).sum()
+    true_negatives = ((results_df['actual_label'] == 0) & (results_df['predicted_phishing'] == False)).sum()
+    false_negatives = ((results_df['actual_label'] == 1) & (results_df['predicted_phishing'] == False)).sum()
+    
+    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    print("\nModel Metrics:")
+    print("-" * 50)
+    print(f"Accuracy: {accuracy:.2f}")
+    print(f"Precision: {precision:.2f}")
+    print(f"Recall: {recall:.2f}")
+    print(f"F1 Score: {f1_score:.2f}")
+    
+    return results_df
 
 if __name__ == "__main__":
-    # Test with different thresholds
-    print("\nTesting with default threshold (0.5):")
-    test_predictions(threshold=0.5)
+    # Test the model directly
+    logger.info("Starting direct model testing...")
+    test_model_directly(threshold=0.5)
     
-    print("\nTesting with stricter threshold (0.7):")
-    test_predictions(threshold=0.7) 
+    # Test the API with dataset
+    logger.info("\nStarting API testing with dataset...")
+    test_api_with_dataset(sample_size=100, threshold=0.5) 
