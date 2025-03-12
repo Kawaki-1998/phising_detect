@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phishing-domain-detection"
+version = "1.0.0"
+description = "A machine learning-based phishing domain detection system"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Kawaki-1998", email = "your.email@example.com"},
+]
+
+[tool.pytest.ini_options]
+addopts = "-v --cov=src --cov-report=xml"
+testpaths = ["src/tests"]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "pass",
+] 
