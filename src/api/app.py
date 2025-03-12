@@ -70,60 +70,35 @@ class DashboardStats(BaseModel):
     brand_impersonation_stats: Dict[str, int]
     confidence_distribution: Dict[str, int]
 
-def log_prediction_to_mlflow(domain: str, features: Dict, prediction_result: Dict, model_version: str = "1.0.0"):
-    """Enhanced MLflow logging with comprehensive metrics and artifacts."""
-    timestamp = datetime.now().isoformat()
-    
-    # Create a run name with timestamp for easier identification
-    run_name = f"prediction_{domain}_{timestamp}"
-    
-    with mlflow.start_run(run_name=run_name):
-        # Log basic parameters
-        mlflow.log_params({
-            "domain": domain,
-            "threshold": prediction_result["threshold"],
-            "model_version": model_version,
-            "timestamp": timestamp
-        })
-        
-        # Log detailed metrics
-        mlflow.log_metrics({
-            "prediction_confidence": prediction_result["confidence"],
-            "phishing_probability": prediction_result["risk_score"],
-            "domain_length": len(domain),
-            "num_suspicious_features": len(prediction_result["suspicious_features"]),
-            "num_dots": domain.count('.'),
-            "num_hyphens": domain.count('-'),
-            "num_digits": sum(c.isdigit() for c in domain)
-        })
-        
-        # Log feature importance
-        if hasattr(model, 'feature_importances_'):
-            feature_importance = pd.DataFrame({
-                'feature': feature_names,
-                'importance': model.feature_importances_
+def log_prediction_to_mlflow(domain: str, features: dict, prediction_result: dict):
+    """Log prediction details to MLflow."""
+    try:
+        with mlflow.start_run():
+            # Convert all values to JSON serializable format
+            prediction_details = {
+                "domain": domain,
+                "features": {k: float(v) if isinstance(v, (int, float, bool)) else str(v) for k, v in features.items()},
+                "prediction": {k: float(v) if isinstance(v, (int, float, bool)) else str(v) for k, v in prediction_result.items()}
+            }
+            
+            # Log parameters
+            mlflow.log_params({"domain": domain})
+            
+            # Log metrics
+            mlflow.log_metrics({
+                "risk_score": float(prediction_result["risk_score"]),
+                "confidence": float(prediction_result["confidence"])
             })
-            feature_importance.to_csv('feature_importance.csv', index=False)
-            mlflow.log_artifact('feature_importance.csv')
-        
-        # Log prediction details as artifacts
-        prediction_details = {
-            "input_features": features,
-            "prediction_result": prediction_result,
-            "brand_detection": prediction_result["brand_detection"],
-            "suspicious_features": prediction_result["suspicious_features"]
-        }
-        with open('prediction_details.json', 'w') as f:
-            json.dump(prediction_details, f, indent=2)
-        mlflow.log_artifact('prediction_details.json')
-        
-        # Add tags for easier filtering
-        mlflow.set_tags({
-            "prediction_type": "phishing" if prediction_result["is_phishing"] else "legitimate",
-            "confidence_level": "high" if prediction_result["confidence"] > 0.8 else "medium" if prediction_result["confidence"] > 0.5 else "low",
-            "has_brand_match": "true" if prediction_result["brand_detection"] else "false",
-            "has_suspicious_features": "true" if prediction_result["suspicious_features"] else "false"
-        })
+            
+            # Save prediction details as JSON artifact
+            with open("prediction_details.json", "w") as f:
+                json.dump(prediction_details, f, indent=2)
+            mlflow.log_artifact("prediction_details.json")
+            
+    except Exception as e:
+        logger.error(f"Error logging to MLflow: {str(e)}")
+        # Don't raise the exception since MLflow logging is not critical
+        pass
 
 def extract_features_for_domain(domain: str) -> Dict:
     """Extract all features for a domain."""
@@ -185,6 +160,10 @@ def get_suspicious_features(features: Dict, domain: str) -> List[str]:
 @app.post("/check_domain", response_model=DomainResponse)
 async def check_domain(request: DomainRequest):
     try:
+        # Validate domain
+        if not request.domain:
+            raise HTTPException(status_code=400, detail="Domain cannot be empty")
+            
         # Extract features
         features = feature_extractor.extract_features(request.domain)
         
@@ -208,7 +187,7 @@ async def check_domain(request: DomainRequest):
             'qty_dollar_url': 0,
             'qty_percent_url': 0,
             'qty_tld_url': 1,
-            'length_url': features['length'],
+            'length_url': features['domain_length'],
             'qty_dot_domain': features['num_dots'],
             'qty_hyphen_domain': features['num_hyphens'],
             'qty_underline_domain': 0,
@@ -227,7 +206,7 @@ async def check_domain(request: DomainRequest):
             'qty_dollar_domain': 0,
             'qty_percent_domain': 0,
             'qty_vowels_domain': sum(c in 'aeiou' for c in request.domain.lower()),
-            'domain_length': features['length'],
+            'domain_length': features['domain_length'],
             'domain_in_ip': 0,
             'server_client_domain': 0,
             'qty_dot_directory': 0,
@@ -303,49 +282,59 @@ async def check_domain(request: DomainRequest):
             'url_shortened': 0
         }
         
-        # Scale features
-        feature_vector = np.array([feature_dict[feature] for feature in feature_names]).reshape(1, -1)
-        scaled_features = scaler.transform(feature_vector)
+        # Convert features to array and scale
+        feature_values = []
+        for feature_name in feature_names:
+            feature_values.append(feature_dict[feature_name])
+        X = np.array(feature_values).reshape(1, -1)
+        X_scaled = scaler.transform(X)
         
-        # Make prediction
-        prediction_proba = model.predict_proba(scaled_features)[0]
-        is_phishing = prediction_proba[1] >= request.threshold
-        confidence = prediction_proba[1] if is_phishing else prediction_proba[0]
+        # Get prediction probability
+        proba = model.predict_proba(X_scaled)[0]
+        risk_score = proba[1]  # Probability of being phishing
         
-        # Get suspicious features and brand detection
-        suspicious_features_dict = feature_extractor.get_suspicious_features(request.domain)
-        suspicious_features = []
+        # Determine if phishing based on threshold
+        is_phishing = risk_score > request.threshold
         
-        # Convert dictionary to list of strings
-        if 'keywords' in suspicious_features_dict:
-            suspicious_features.extend([f"Contains suspicious keyword: {kw}" for kw in suspicious_features_dict['keywords']])
-        if 'number_substitutions' in suspicious_features_dict:
-            suspicious_features.extend([f"Contains number substitution: {sub}" for sub in suspicious_features_dict['number_substitutions']])
-        if 'excessive_hyphens' in suspicious_features_dict:
-            suspicious_features.append(f"Excessive hyphens: {suspicious_features_dict['excessive_hyphens']}")
-        if 'excessive_dots' in suspicious_features_dict:
-            suspicious_features.append(f"Excessive dots: {suspicious_features_dict['excessive_dots']}")
-        
-        # Get brand detection results
+        # Get brand detection and suspicious features
         brand_detection = feature_extractor.detect_brand(request.domain)
+        suspicious_features = feature_extractor.get_suspicious_features(request.domain)
         
-        # Prepare prediction result
+        # Format brand detection as a dictionary if it's not already
+        if not isinstance(brand_detection, dict):
+            brand_detection = {"detected_brand": str(brand_detection) if brand_detection else "none"}
+        
+        # Calculate confidence
+        confidence = max(proba)
+        
+        # Log prediction to MLflow
         prediction_result = {
             "domain": request.domain,
             "is_phishing": is_phishing,
-            "confidence": confidence,
-            "risk_score": prediction_proba[1],
-            "suspicious_features": suspicious_features,
+            "risk_score": float(risk_score),
+            "confidence": float(confidence),
+            "threshold": request.threshold,
             "brand_detection": brand_detection,
-            "threshold": request.threshold
+            "suspicious_features": suspicious_features
         }
-        
-        # Log prediction with enhanced tracking
         log_prediction_to_mlflow(request.domain, feature_dict, prediction_result)
         
-        return DomainResponse(**prediction_result)
+        return DomainResponse(
+            domain=request.domain,
+            is_phishing=is_phishing,
+            risk_score=float(risk_score),
+            confidence=float(confidence),
+            brand_detection=brand_detection,
+            suspicious_features=suspicious_features
+        )
+        
+    except HTTPException as e:
+        # Re-raise HTTP exceptions
+        raise e
     except Exception as e:
         logger.error(f"Error processing domain {request.domain}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

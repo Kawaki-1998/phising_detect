@@ -50,12 +50,12 @@ class FeatureExtractor:
         
         return features
 
-    def get_suspicious_features(self, domain: str) -> dict:
+    def get_suspicious_features(self, domain: str) -> list:
         """Get suspicious features found in the domain."""
         if not domain:
-            return {}
+            return []
 
-        suspicious = {}
+        suspicious = []
         domain_lower = domain.lower()
 
         # Check for suspicious keywords
@@ -64,18 +64,18 @@ class FeatureExtractor:
             if keyword in domain_lower
         ]
         if found_keywords:
-            suspicious['keywords'] = found_keywords
+            suspicious.append(f"Contains suspicious keywords: {', '.join(found_keywords)}")
 
         # Check for number-letter substitutions
         substitutions = re.findall(r'\d+', domain)
         if substitutions:
-            suspicious['number_substitutions'] = substitutions
+            suspicious.append(f"Contains number substitutions: {', '.join(substitutions)}")
 
         # Check for excessive punctuation
         if domain.count('-') > 2:
-            suspicious['excessive_hyphens'] = domain.count('-')
+            suspicious.append(f"Excessive hyphens: {domain.count('-')}")
         if domain.count('.') > 2:
-            suspicious['excessive_dots'] = domain.count('.')
+            suspicious.append(f"Excessive dots: {domain.count('.')}")
 
         return suspicious
 

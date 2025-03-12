@@ -42,7 +42,8 @@ def test_invalid_domain():
             "/check_domain",
             json={"domain": "", "threshold": 0.5}
         )
-        assert response.status_code == 500
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Domain cannot be empty"
 
 def test_health_check():
     response = client.get("/health")
