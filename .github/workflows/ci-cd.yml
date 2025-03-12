@@ -32,6 +32,27 @@ jobs:
     - name: Install package in development mode
       run: |
         python setup.py develop
+        
+    - name: Create model directory and download test models
+      run: |
+        mkdir -p models
+        # Download test models or create dummy models for testing
+        python -c "
+        import joblib
+        import numpy as np
+        from lightgbm import LGBMClassifier
+        
+        # Create a simple model for testing
+        model = LGBMClassifier()
+        X = np.random.rand(100, 10)
+        y = np.random.randint(0, 2, 100)
+        model.fit(X, y)
+        
+        # Save model components
+        joblib.dump(model, 'models/best_phishing_model.pkl')
+        joblib.dump(np.array(['feature_' + str(i) for i in range(10)]), 'models/feature_names.pkl')
+        joblib.dump(model, 'models/feature_scaler.pkl')
+        "
       
     - name: List installed packages
       run: pip list
