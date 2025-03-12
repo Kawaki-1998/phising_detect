@@ -228,10 +228,16 @@ async def check_domain(request: DomainRequest):
         # Scale features
         try:
             feature_values = []
-            for feature_name in required_features:
+            feature_names = ['domain_google_index', 'domain_in_ip', 'num_hyphens', 'qty_redirects', 'ttl_hostname',
+                           'qty_mx_servers', 'server_client_domain', 'has_suspicious_keywords', 'time_domain_activation',
+                           'asn_ip', 'domain_length', 'num_dots', 'has_brand_name', 'time_response',
+                           'tls_ssl_certificate', 'qty_nameservers', 'num_digits', 'url_shortened',
+                           'time_domain_expiration', 'qty_ip_resolved', 'url_google_index', 'domain_spf']
+            
+            for feature_name in feature_names:
                 feature_values.append(float(features[feature_name]))
             
-            X = pd.DataFrame([feature_values], columns=list(required_features))
+            X = pd.DataFrame([feature_values], columns=feature_names)
             X_scaled = pd.DataFrame(
                 scaler.transform(X),
                 columns=X.columns,

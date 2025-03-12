@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 # Define required features
 REQUIRED_FEATURES = {
     'domain_length',
-    'qty_dot_domain',  # num_dots
-    'qty_hyphen_domain',  # num_hyphens
-    'qty_vowels_domain',  # num_digits (proxy)
+    'num_dots',
+    'num_hyphens',
+    'num_digits',
+    'has_suspicious_keywords',
+    'has_brand_name',
     'domain_in_ip',
     'server_client_domain',
     'time_response',
@@ -50,12 +52,8 @@ class ModelTrainer:
             df = pd.read_csv(self.data_path)
             logger.info(f"Loaded {len(df)} rows from {self.data_path}")
             
-            # Add placeholder features for suspicious keywords and brand names
-            df['has_suspicious_keywords'] = 0
-            df['has_brand_name'] = 0
-            
             # Select required features
-            features = list(REQUIRED_FEATURES) + ['has_suspicious_keywords', 'has_brand_name']
+            features = list(REQUIRED_FEATURES)
             X = df[features]
             y = df['phishing']
             
@@ -162,7 +160,7 @@ class ModelTrainer:
 def train_and_save_model():
     """Main function to train and save the model."""
     try:
-        trainer = ModelTrainer('data/processed/phishing_data.csv')
+        trainer = ModelTrainer('data/processed/phishing_data_new.csv')
         model, metrics = trainer.train_model()
         trainer.save_model(model, metrics)
         logger.info("Model training and saving completed successfully")

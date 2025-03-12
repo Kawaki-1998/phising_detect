@@ -46,8 +46,8 @@
   "prediction": {
     "domain": "g00gle-secure.com",
     "is_phishing": true,
-    "risk_score": "0.9965248926945589",
-    "confidence": "0.9965248926945589",
+    "risk_score": "0.9600011100955596",
+    "confidence": "0.9600011100955596",
     "brand_detection": "{}",
     "suspicious_features": "['Contains suspicious keywords: secure', 'Contains number substitutions: 00']"
   }
