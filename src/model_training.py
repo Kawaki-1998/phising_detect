@@ -14,6 +14,30 @@ import lightgbm
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Define required features
+REQUIRED_FEATURES = {
+    'domain_length',
+    'qty_dot_domain',  # num_dots
+    'qty_hyphen_domain',  # num_hyphens
+    'qty_vowels_domain',  # num_digits (proxy)
+    'domain_in_ip',
+    'server_client_domain',
+    'time_response',
+    'domain_spf',
+    'asn_ip',
+    'time_domain_activation',
+    'time_domain_expiration',
+    'qty_ip_resolved',
+    'qty_nameservers',
+    'qty_mx_servers',
+    'ttl_hostname',
+    'tls_ssl_certificate',
+    'qty_redirects',
+    'url_google_index',
+    'domain_google_index',
+    'url_shortened'
+}
+
 class ModelTrainer:
     def __init__(self, data_path: str):
         self.data_path = data_path
@@ -26,9 +50,17 @@ class ModelTrainer:
             df = pd.read_csv(self.data_path)
             logger.info(f"Loaded {len(df)} rows from {self.data_path}")
             
-            # Split features and target
-            X = df.drop('phishing', axis=1)
+            # Add placeholder features for suspicious keywords and brand names
+            df['has_suspicious_keywords'] = 0
+            df['has_brand_name'] = 0
+            
+            # Select required features
+            features = list(REQUIRED_FEATURES) + ['has_suspicious_keywords', 'has_brand_name']
+            X = df[features]
             y = df['phishing']
+            
+            # Log feature info
+            logger.info(f"Selected {len(features)} features: {', '.join(features)}")
             
             return X, y
             
@@ -47,9 +79,17 @@ class ModelTrainer:
                 X, y, test_size=0.2, random_state=42, stratify=y
             )
             
-            # Scale features
-            X_train_scaled = self.scaler.fit_transform(X_train)
-            X_test_scaled = self.scaler.transform(X_test)
+            # Scale features while preserving feature names
+            X_train_scaled = pd.DataFrame(
+                self.scaler.fit_transform(X_train),
+                columns=X_train.columns,
+                index=X_train.index
+            )
+            X_test_scaled = pd.DataFrame(
+                self.scaler.transform(X_test),
+                columns=X_test.columns,
+                index=X_test.index
+            )
             
             # Save the scaler
             joblib.dump(self.scaler, 'models/feature_scaler.pkl')

@@ -102,9 +102,9 @@ class DomainRequest(BaseModel):
     @validator('domain')
     def validate_domain(cls, v):
         if not v:
-            raise ValueError('Domain cannot be empty')
+            raise HTTPException(status_code=400, detail='Domain cannot be empty')
         if len(v) > 253:  # Maximum length of a domain name
-            raise ValueError('Domain name too long')
+            raise HTTPException(status_code=400, detail='Domain name too long')
         return v.lower()
 
     @validator('threshold')
@@ -203,17 +203,21 @@ async def check_domain(request: DomainRequest):
         # Extract features
         try:
             features = feature_extractor.extract_features(request.domain)
-            logger.debug(f"Extracted features: {features}")
-        except Exception as e:
+        except ValueError as e:
             logger.error(f"Error extracting features for domain {request.domain}: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Error extracting features: {str(e)}"
-            )
+            raise HTTPException(status_code=400, detail=f"Error extracting features: {str(e)}")
         
         # Validate features
-        missing_features = set(feature_names) - set(features.keys())
+        required_features = {
+            'domain_length', 'num_dots', 'num_hyphens', 'num_digits',
+            'has_suspicious_keywords', 'has_brand_name', 'domain_in_ip',
+            'server_client_domain', 'time_response', 'domain_spf', 'asn_ip',
+            'time_domain_activation', 'time_domain_expiration', 'qty_ip_resolved',
+            'qty_nameservers', 'qty_mx_servers', 'ttl_hostname', 'tls_ssl_certificate',
+            'qty_redirects', 'url_google_index', 'domain_google_index', 'url_shortened'
+        }
+        missing_features = required_features - set(features.keys())
         if missing_features:
             logger.error(f"Missing features for domain {request.domain}: {missing_features}")
             raise HTTPException(
@@ -224,11 +228,15 @@ async def check_domain(request: DomainRequest):
         # Scale features
         try:
             feature_values = []
-            for feature_name in feature_names:
+            for feature_name in required_features:
                 feature_values.append(float(features[feature_name]))
             
-            X = np.array(feature_values).reshape(1, -1)
-            X_scaled = scaler.transform(X)
+            X = pd.DataFrame([feature_values], columns=list(required_features))
+            X_scaled = pd.DataFrame(
+                scaler.transform(X),
+                columns=X.columns,
+                index=X.index
+            )
             logger.debug(f"Scaled features shape: {X_scaled.shape}")
         except Exception as e:
             logger.error(f"Error scaling features for domain {request.domain}: {str(e)}")
