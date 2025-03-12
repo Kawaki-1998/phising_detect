@@ -27,7 +27,11 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["src/tests/*"]
+branch = true
+omit = [
+    "src/tests/*",
+    "src/**/__init__.py",
+]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -36,4 +40,5 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "raise NotImplementedError",
     "pass",
-] 
+]
+show_missing = true 
