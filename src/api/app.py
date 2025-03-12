@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 import joblib
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Union
 import logging
 from src.features.brand_detection import BrandDetector
 import uvicorn
@@ -55,11 +55,13 @@ class DomainResponse(BaseModel):
     suspicious_features: List[str]
 
 class DashboardStats(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    
     total_predictions: int
     phishing_ratio: float
     avg_confidence: float
     top_suspicious_features: List[Dict[str, int]]
-    detection_timeline: List[Dict[str, any]]
+    detection_timeline: List[Dict[str, Union[str, float, bool]]]
     brand_impersonation_stats: Dict[str, int]
     confidence_distribution: Dict[str, int]
 

@@ -1,16 +1,40 @@
 import pytest
 from src.feature_extraction.feature_extractor import FeatureExtractor
 
-def test_feature_extraction():
-    extractor = FeatureExtractor()
-    test_domain = "test-domain.com"
-    features = extractor.extract_features(test_domain)
+@pytest.fixture
+def feature_extractor():
+    return FeatureExtractor()
+
+def test_extract_features_legitimate_domain(feature_extractor):
+    domain = "google.com"
+    features = feature_extractor.extract_features(domain)
     
     assert isinstance(features, dict)
     assert len(features) > 0
-    assert features['num_hyphens'] == 1
-    assert features['num_dots'] == 1
-    assert features['length'] == len(test_domain)
+    assert features["domain_length"] == len(domain)
+    assert features["num_dots"] == domain.count(".")
+    assert features["num_hyphens"] == domain.count("-")
+    assert features["num_digits"] == sum(c.isdigit() for c in domain)
+
+def test_extract_features_suspicious_domain(feature_extractor):
+    domain = "g00gle-secure.com"
+    features = feature_extractor.extract_features(domain)
+    
+    assert isinstance(features, dict)
+    assert len(features) > 0
+    assert features["domain_length"] == len(domain)
+    assert features["num_dots"] == domain.count(".")
+    assert features["num_hyphens"] == domain.count("-")
+    assert features["num_digits"] == sum(c.isdigit() for c in domain)
+    assert features["has_suspicious_keywords"] == True
+
+def test_extract_features_empty_domain(feature_extractor):
+    with pytest.raises(ValueError):
+        feature_extractor.extract_features("")
+
+def test_extract_features_invalid_domain(feature_extractor):
+    with pytest.raises(ValueError):
+        feature_extractor.extract_features("not_a_valid_domain")
 
 def test_suspicious_domain_features():
     extractor = FeatureExtractor()
