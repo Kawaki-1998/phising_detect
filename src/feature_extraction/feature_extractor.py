@@ -16,20 +16,15 @@ class FeatureExtractor:
     def extract_features(self, domain: str) -> dict:
         """Extract features from a domain name."""
         if not domain:
-            return {
-                'length': 0,
-                'num_digits': 0,
-                'num_hyphens': 0,
-                'num_dots': 0,
-                'has_suspicious_keywords': 0,
-                'has_brand_name': 0,
-                'has_suspicious_tld': 0
-            }
+            raise ValueError("Domain cannot be empty")
+            
+        if not self._is_valid_domain(domain):
+            raise ValueError("Invalid domain format")
 
         features = {}
         
         # Basic features
-        features['length'] = len(domain)
+        features['domain_length'] = len(domain)  # Changed from 'length' to 'domain_length'
         features['num_digits'] = sum(c.isdigit() for c in domain)
         features['num_hyphens'] = domain.count('-')
         features['num_dots'] = domain.count('.')
@@ -100,4 +95,13 @@ class FeatureExtractor:
                 else:
                     detected_brands[brand] = 'potential_impersonation'
 
-        return detected_brands 
+        return detected_brands
+
+    def _is_valid_domain(self, domain: str) -> bool:
+        """Check if the domain format is valid."""
+        if not domain or len(domain) < 4:  # Minimum valid domain length
+            return False
+        
+        # Basic domain format check
+        domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$'
+        return bool(re.match(domain_pattern, domain)) 
