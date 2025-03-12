@@ -36,10 +36,11 @@ env/
 coverage.xml
 htmlcov/
 .pytest_cache/
+.tox/
 
 # MLflow
 mlruns/
-mlartifacts/
+mlflow.db
 
 # Logs
 *.log
@@ -49,10 +50,12 @@ logs/
 *.pkl
 *.h5
 *.joblib
+*.model
 
 # Environment variables
 .env
-.env.*
+.env.local
+.env.*.local
 
 # Distribution
 dist/
@@ -65,4 +68,7 @@ build/
 
 # macOS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Render
+.render-buildpacks/ 
